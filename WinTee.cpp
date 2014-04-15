@@ -125,7 +125,7 @@ DWORD WINAPI ListenerThread(LPVOID lpParameter)
 {
     DWORD dwBytesRead;
     DWORD dwBytesWritten;
-    DWORD  dwRetCode = ERROR_SUCCESS;
+    DWORD dwRetCode = ERROR_SUCCESS;
     ListenerParameters* pParameters = (ListenerParameters*) lpParameter;
 
     //
@@ -173,13 +173,14 @@ DWORD WINAPI ListenerThread(LPVOID lpParameter)
     return dwRetCode;
 }
 
-extern "C" int __cdecl _tmain(int /* argc */, _TCHAR* /* argv[] */)
+extern "C" int __cdecl _tmain(int argc, _TCHAR* argv[])
 {
-    DWORD  dwRetCode = ERROR_INVALID_FUNCTION;
-    LPTSTR pszChildCmdLine = NULL;
-
-    LPCTSTR pszCmdLine = GetCommandLine();
-    LPCTSTR pszArgs = pszCmdLine;
+    DWORD   dwRetCode = ERROR_INVALID_FUNCTION;
+    LPTSTR  pszChildCmdLine = NULL;
+    LPTSTR  pszArgs = NULL;
+    LPCTSTR pszCmdPrefix = _T("cmd.exe /x/c ");
+    DWORD   cchChildCmdLine = 0;
+    DWORD   dwChildCmdLineStartOffset = 0;
 
     STARTUPINFO ChildStartupInfo;
 
@@ -212,6 +213,9 @@ extern "C" int __cdecl _tmain(int /* argc */, _TCHAR* /* argv[] */)
     bool  fConsoleErrorOn = true;
     bool  fLogFileErrorOn = true;
 
+    TCHAR   szPidFile[MAX_PATH] = {0};
+    HANDLE  hPidFile = INVALID_HANDLE_VALUE;
+
     //
     // Save off our inherited std handles
     //
@@ -229,76 +233,82 @@ extern "C" int __cdecl _tmain(int /* argc */, _TCHAR* /* argv[] */)
     ExpandBuffer(bufLastErrorStdErr);
 
     //
-    // Find start of arguments. If the first character is a quote,
-    // then the EXE name ends with a quote. Otherwise look for the
-    // first space.
+    // Look for switches directed at us
     //
-    bool fQuoted = false;
-    while( *pszArgs )
+    dwChildCmdLineStartOffset = argc;
+    for(int i = 1; i < argc; i++ )
     {
-        if( *pszArgs == '\"' )
-            fQuoted = !fQuoted;
+        LPCTSTR pszSwitch = argv[i];
 
-        if( _istspace(*pszArgs) && !fQuoted )
+        if( 0 == _tcsicmp(pszSwitch, _T("-nc")) )
         {
-            pszArgs++;
+            fConsoleOutputOn = false;
+            fConsoleErrorOn = false;
+        }
+        else if( 0 == _tcsicmp(pszSwitch, _T("-nl")) )
+        {
+            fLogFileOutputOn = false;
+            fLogFileErrorOn = false;
+        }
+        else if( 0 == _tcsicmp(pszSwitch, _T("-nco")) )
+            fConsoleOutputOn = false;
+        else if( 0 == _tcsicmp(pszSwitch, _T("-nlo")) )
+            fLogFileOutputOn = false;                  
+        else if( 0 == _tcsicmp(pszSwitch, _T("-nce")) )
+            fConsoleErrorOn = false;
+        else if( 0 == _tcsicmp(pszSwitch, _T("-nle")) )
+            fLogFileErrorOn = false;
+        else if( 0 == _tcsicmp(pszSwitch, _T("-pid")) )
+        {
+            if (i + 1 == argc)
+            {
+                ConPrint(_T("Error: -pid switch specified without associated file name\n"));
+                dwRetCode = GetLastError();
+                goto Error;
+            }
+
+            _tcscpy_s(szPidFile, _countof(szPidFile), argv[++i]);
+        }
+        else
+        {
+            dwChildCmdLineStartOffset = i;
             break;
         }
-
-        pszArgs++;
     }
 
     //
-    // Advance past extra white space
+    // Output the current process' PID to the specified file
     //
-    while( *pszArgs &&
-           _istspace(*pszArgs) )
-       pszArgs++;
-
-    //
-    // Look for switches directed at us
-    //
-    while( *pszArgs == '-' ||
-           *pszArgs == '/' )
+    if (_tcslen(szPidFile) > 0)
     {
-        LPCTSTR pszSwitch = pszArgs;
-
-        while( *pszArgs &&
-               !_istspace(*pszArgs))
-           pszArgs++;
-
-        if( (pszArgs - pszSwitch) == 3 )
+        DWORD dwPid = GetCurrentProcessId();
+        if( (hPidFile = CreateFile(szPidFile, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, CREATE_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL, NULL ) ) == INVALID_HANDLE_VALUE )
         {
-            if( 0 == _tcsnicmp(pszSwitch, _T("-nc"), (pszArgs - pszSwitch)) )
-            {
-                fConsoleOutputOn = false;
-                fConsoleErrorOn = false;
-            }
-            else if( 0 == _tcsnicmp(pszSwitch, _T("-nl"), (pszArgs - pszSwitch)) )
-            {
-                fLogFileOutputOn = false;
-                fLogFileErrorOn = false;
-            }
+            ConPrint(Format(bufFormatMain, _T("Error creating PID file '%s':\n%s\n"),
+                szMaxPathBuffer, GetLastErrorMessage(bufLastErrorMain)));
+            dwRetCode = GetLastError();
+            goto Error;
         }
 
-        if( (pszArgs - pszSwitch) == 4 )
+        DWORD dwBytesWritten;
+        TCHAR szPidString[64] = {0};
+        if (-1 == _stprintf_s(szPidString, _countof(szPidString), _T("%d"), dwPid))
         {
-            if( 0 == _tcsnicmp(pszSwitch, _T("-nco"), (pszArgs - pszSwitch)) )
-                fConsoleOutputOn = false;
-            else if( 0 == _tcsnicmp(pszSwitch, _T("-nlo"), (pszArgs - pszSwitch)) )
-                fLogFileOutputOn = false;                  
-            else if( 0 == _tcsnicmp(pszSwitch, _T("-nce"), (pszArgs - pszSwitch)) )
-                fConsoleErrorOn = false;
-            else if( 0 == _tcsnicmp(pszSwitch, _T("-nle"), (pszArgs - pszSwitch)) )
-                fLogFileErrorOn = false;
+            ConPrint(Format(bufFormatMain, _T("Error formatting PID string:\n%d\n"), dwPid));
+            goto Error;
         }
 
-        //
-        // Advance past extra white space
-        //
-        while( *pszArgs &&
-               _istspace(*pszArgs) )
-           pszArgs++;
+        if( !WriteFile(hPidFile, szPidString, _tcslen(szPidString) * sizeof(TCHAR), &dwBytesWritten, NULL) )
+        {
+            ConPrint(Format(bufFormatMain, _T("Error writing to PID file:\n%s\n"),
+                GetLastErrorMessage(bufLastErrorMain)));
+            dwRetCode = GetLastError();
+            goto Error;
+        }
+
+        CloseHandle(hPidFile);
+        hPidFile = INVALID_HANDLE_VALUE;
     }
 
     //
@@ -389,13 +399,42 @@ extern "C" int __cdecl _tmain(int /* argc */, _TCHAR* /* argv[] */)
     //
     // Allocate space for the non-constant command line
     //
-    DWORD cchChildCmdLine = _tcslen(pszArgs) + 100;
+    cchChildCmdLine = _tcslen(pszCmdPrefix) + 1;
+    for( int i = dwChildCmdLineStartOffset; i < argc; i++ )
+    {
+        // Allocate enough for the argument, two quotes and a space
+        cchChildCmdLine += _tcslen(argv[i]) + 3;
+    }
+
     pszChildCmdLine = (LPTSTR) HeapAlloc(GetProcessHeap(), NULL, cchChildCmdLine * sizeof(TCHAR));
     if( pszChildCmdLine == NULL )
     {
         ConPrint(_T("Memory allocation error.\n"));
         dwRetCode = GetLastError();
         goto Error;
+    }
+
+    pszArgs = (LPTSTR) HeapAlloc(GetProcessHeap(), NULL, cchChildCmdLine * sizeof(TCHAR));
+    pszArgs[0] = _T('\0');
+    if( pszArgs == NULL )
+    {
+        ConPrint(_T("Memory allocation error.\n"));
+        dwRetCode = GetLastError();
+        goto Error;
+    }
+
+    // Copy arguments into a single string
+    for( int i = dwChildCmdLineStartOffset; i < argc; i++ )
+    {
+        if (_tcsstr(argv[i], _T(" ")) != NULL)
+            _tcscat_s(pszArgs, cchChildCmdLine, _T("\""));
+
+        _tcscat_s(pszArgs, cchChildCmdLine, argv[i]);
+
+        if (_tcsstr(argv[i], _T(" ")) != NULL)
+            _tcscat_s(pszArgs, cchChildCmdLine, _T("\""));
+
+        _tcscat_s(pszArgs, cchChildCmdLine, _T(" "));
     }
 
     //
@@ -418,7 +457,7 @@ extern "C" int __cdecl _tmain(int /* argc */, _TCHAR* /* argv[] */)
         //
         // Didn't work. Could be a cmd.exe command... Try that.
         //
-        _tcscpy_s(pszChildCmdLine, cchChildCmdLine, _T("cmd.exe /x/c "));
+        _tcscpy_s(pszChildCmdLine, cchChildCmdLine, pszCmdPrefix);
         _tcscat_s(pszChildCmdLine, cchChildCmdLine, pszArgs);
         if( !CreateProcess( NULL, pszChildCmdLine,
             NULL, NULL, TRUE, 0, NULL, NULL,
@@ -536,6 +575,9 @@ Error:
     if( pszChildCmdLine != NULL )
         HeapFree( GetProcessHeap(), NULL, pszChildCmdLine );
 
+    if( pszArgs != NULL )
+        HeapFree( GetProcessHeap(), NULL, pszArgs );
+
     if( hStdOutReadPipe != INVALID_HANDLE_VALUE )
         CloseHandle( hStdOutReadPipe );
 
@@ -571,6 +613,9 @@ Error:
 
     if( ChildProcessInfo.hProcess != INVALID_HANDLE_VALUE )
         CloseHandle(ChildProcessInfo.hProcess);
+
+    if( hPidFile != INVALID_HANDLE_VALUE )
+        CloseHandle(hPidFile);
 
 	return dwRetCode;
 }
