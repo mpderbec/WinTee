@@ -17,5 +17,8 @@ Specifies a text file to output WinTee's process identifier (PID). This is usefu
 `-n[c|l][o|e]`
 Suppresses console (c) or log (l) output (o) or error (e) streams. For example, `-nle` will suppress the error stream meant for the log file.
 
+# Building
+
+The solution file was created under Visual Studio 2012. There are no dependencies other than windows.h and stdio.h, so you should be able to create a project file for another version if needed.
 
 [1]: http://en.wikipedia.org/wiki/Tee_%28command%29
